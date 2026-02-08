@@ -21,12 +21,12 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 3000,
+        max_tokens: 4096,
         messages: [{ role: "user", content: prompt }],
         tools: [{
           type: "web_search_20250305",
           name: "web_search",
-          max_uses: 3,
+          max_uses: 5,
           user_location: { type: "approximate", city: "Lynn", region: "Massachusetts", country: "US", timezone: "America/New_York" },
         }],
       }),
@@ -34,7 +34,7 @@ export default async function handler(req, res) {
 
     const raw = await response.text();
     if (!response.ok) {
-      console.error(`[proxy] ${response.status}: ${raw.slice(0, 300)}`);
+      console.error(`[proxy] ${response.status}: ${raw.slice(0, 400)}`);
       return res.status(response.status).json({ error: `API ${response.status}`, details: raw.slice(0, 500) });
     }
 
