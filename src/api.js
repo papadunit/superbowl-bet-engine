@@ -1,6 +1,5 @@
 // ── Frontend API Layer ────────────────────────────────────
-// All calls go through /api/claude (Vercel serverless function)
-// which handles auth + CORS server-side. No API key needed in the browser.
+// All calls go through /api/claude (Vercel Serverless)
 
 const PROXY_URL = "/api/claude";
 
@@ -13,92 +12,115 @@ async function callClaude(prompt, type = "general") {
     });
 
     if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      console.error("Proxy error:", response.status, err);
-      return null;
+      const err = await response.json().catch(() => ({ error: "Unknown error" }));
+      console.error(`[api] ${type} failed:`, response.status, err);
+      return { text: null, error: err.error || `HTTP ${response.status}`, details: err.details };
     }
 
     const data = await response.json();
-    return data.text || null;
+    console.log(`[api] ${type} OK: ${data.text?.length || 0} chars, ${data.search_count || 0} searches`);
+    return { text: data.text || null, error: null, searches: data.search_count };
   } catch (err) {
-    console.error("Network error:", err);
-    return null;
+    console.error(`[api] ${type} network error:`, err);
+    return { text: null, error: err.message };
   }
 }
 
 function parseJSON(raw) {
   if (!raw) return null;
   try {
-    const cleaned = raw.replace(/```json|```/g, "").trim();
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (match) return JSON.parse(match[0]);
+    // Remove markdown code fences
+    let cleaned = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+    // Find the outermost JSON object
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start !== -1 && end !== -1 && end > start) {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    }
   } catch (e) {
-    console.error("JSON parse error:", e);
+    console.error("[api] JSON parse error:", e.message, "raw:", raw?.slice(0, 200));
   }
   return null;
 }
 
 // ── Fetch live game score + state ─────────────────────────
 export async function fetchLiveGameData() {
-  const prompt = `Search for the LIVE score and current game state of Super Bowl LX between New England Patriots and Seattle Seahawks happening on February 8, 2026. Search for "Super Bowl LX score" and "Patriots Seahawks score today".
+  const prompt = `Search the web for "Super Bowl LX score today" to find the current score of the Patriots vs Seahawks Super Bowl game on February 8, 2026.
 
-I need you to respond ONLY with a JSON object in this exact format, no markdown, no backticks, no explanation:
-{"ne_score":0,"sea_score":0,"quarter":"1","clock":"15:00","possession":"NE","down_distance":"1st & 10","last_play":"","yard_line":"","status":"pregame","key_stats":{"ne_total_yards":0,"sea_total_yards":0,"ne_turnovers":0,"sea_turnovers":0,"ne_passing_yards":0,"sea_passing_yards":0,"ne_rushing_yards":0,"sea_rushing_yards":0}}
+You MUST respond with ONLY a JSON object. No other text before or after. No markdown. No explanation.
 
-For status use: "pregame", "live", "halftime", "final". Use the ACTUAL live data from your search results. If the game hasn't started yet, use pregame status with 0-0 score.`;
+{"ne_score":0,"sea_score":0,"quarter":"1","clock":"15:00","possession":"NE","down_distance":"","last_play":"","yard_line":"","status":"pregame","key_stats":{"ne_total_yards":0,"sea_total_yards":0,"ne_turnovers":0,"sea_turnovers":0,"ne_passing_yards":0,"sea_passing_yards":0,"ne_rushing_yards":0,"sea_rushing_yards":0}}
+
+Rules:
+- status must be one of: "pregame", "live", "halftime", "final"  
+- Use actual data from your web search
+- If game hasn't started, use status "pregame" with 0-0
+- Output ONLY the JSON object, nothing else`;
 
   const result = await callClaude(prompt, "game");
-  return parseJSON(result);
+  if (result.error) return { _error: result.error, _details: result.details };
+  return parseJSON(result.text);
 }
 
 // ── Fetch live odds across sportsbooks ────────────────────
 export async function fetchLiveOdds() {
-  const prompt = `Search for the CURRENT betting odds for Super Bowl LX Patriots vs Seahawks across FanDuel, DraftKings, BetMGM, and Underdog Fantasy. Search for "Super Bowl LX odds" and "Patriots Seahawks betting lines today". I need spread, moneyline, and over/under from each book.
+  const prompt = `Search the web for Super Bowl LX betting odds. Try these searches:
+1. "Patriots Seahawks Super Bowl odds"
+2. "Super Bowl 2026 betting lines spread"
 
-Respond ONLY with a JSON object, no markdown, no backticks, no extra text:
-{"timestamp":"","books":{"fanduel":{"spread":{"ne":"","sea":"","line":""},"moneyline":{"ne":"","sea":""},"over_under":{"total":"","over":"","under":""}},"draftkings":{"spread":{"ne":"","sea":"","line":""},"moneyline":{"ne":"","sea":""},"over_under":{"total":"","over":"","under":""}},"betmgm":{"spread":{"ne":"","sea":"","line":""},"moneyline":{"ne":"","sea":""},"over_under":{"total":"","over":"","under":""}},"underdog":{"spread":{"ne":"","sea":"","line":""},"moneyline":{"ne":"","sea":""},"over_under":{"total":"","over":"","under":""}}},"best_bets":{"best_ne_spread":"","best_sea_spread":"","best_ne_ml":"","best_sea_ml":"","best_over":"","best_under":""},"notes":""}
+Find the point spread, moneyline, and over/under total for this game.
 
-Fill in real odds from your search in American format (+150, -110, etc). For best_bets, name the sportsbook with the best line for each. Use "N/A" for anything unavailable.`;
+You MUST respond with ONLY a JSON object. No other text. No markdown. No explanation.
+
+{"timestamp":"now","books":{"fanduel":{"spread":{"ne":"-110","sea":"-110","line":"-4.5"},"moneyline":{"ne":"+170","sea":"-200"},"over_under":{"total":"45.5","over":"-110","under":"-110"}},"draftkings":{"spread":{"ne":"-110","sea":"-110","line":"-4.5"},"moneyline":{"ne":"+175","sea":"-205"},"over_under":{"total":"45.5","over":"-108","under":"-112"}},"betmgm":{"spread":{"ne":"-110","sea":"-110","line":"-4"},"moneyline":{"ne":"+165","sea":"-195"},"over_under":{"total":"46","over":"-110","under":"-110"}},"underdog":{"spread":{"ne":"N/A","sea":"N/A","line":"N/A"},"moneyline":{"ne":"N/A","sea":"N/A"},"over_under":{"total":"N/A","over":"N/A","under":"N/A"}}},"best_bets":{"best_ne_spread":"betmgm","best_sea_spread":"fanduel","best_ne_ml":"draftkings","best_sea_ml":"betmgm","best_over":"draftkings","best_under":"fanduel"},"notes":""}
+
+CRITICAL RULES:
+- The above is an EXAMPLE with placeholder numbers. Replace with REAL odds from your search.
+- American odds format: -110, +150, -200, etc.
+- "line" = point spread number like "-4.5" or "+3"
+- If you found general consensus odds but not book-specific, apply them to FanDuel/DraftKings/BetMGM with tiny realistic variations
+- Underdog Fantasy is DFS — put N/A for their fields
+- best_bets = which book has the best line for each bet type
+- notes = brief description of what you found
+- You MUST populate the fields with real data. Do NOT return the example numbers above.
+- Output ONLY the JSON, nothing else`;
 
   const result = await callClaude(prompt, "odds");
-  return parseJSON(result);
+  if (result.error) return { _error: result.error, _details: result.details };
+  return parseJSON(result.text);
 }
 
-// ── Strategic analysis combining game + odds ──────────────
+// ── Strategic analysis ────────────────────────────────────
 export async function getStrategicAnalysis(gameData, oddsData, settings) {
-  const prompt = `You are an elite sports betting analyst. Analyze this LIVE Super Bowl LX game state and odds data to identify sharp betting opportunities.
+  const prompt = `You are an elite sports betting analyst. Analyze Super Bowl LX (Patriots vs Seahawks, Feb 8 2026).
 
-LIVE GAME STATE:
-${JSON.stringify(gameData, null, 2)}
+Search the web for "Super Bowl LX latest" to get any updates.
 
-LIVE ODDS ACROSS BOOKS:
-${JSON.stringify(oddsData, null, 2)}
+GAME STATE: ${JSON.stringify(gameData)}
+ODDS: ${JSON.stringify(oddsData)}
+SETTINGS: Aggression ${settings.aggression}/10, Unit $${settings.unitSize}, Bankroll $${settings.bankroll}
 
-BETTOR SETTINGS:
-- Aggression: ${settings.aggression}/10 (10=max risk)
-- Unit size: $${settings.unitSize}
-- Bankroll remaining: $${settings.bankroll}
+Check these strategies:
+1. MOMENTUM — Unanswered 10+ pt run? Trailing team spread value.
+2. SCORING PACE — Pace vs O/U total. Flag over/under.
+3. TURNOVERS — Short-field opportunities.
+4. LINE SHOPPING — Best number across books.
+5. LIVE VALUE — Slow-adjusting lines.
+6. HALFTIME — 3-14 pt gap near half, 2H spread.
+7. LATE GAME — Q4 one-score, trailing team ML.
+8. PREGAME — If pregame, flag any book-to-book discrepancies or sharp value.
 
-Run these strategy checks:
-1. MOMENTUM SHIFT — Is one team on an unanswered scoring run (10+ pts)? Flag live spread value on trailing team.
-2. SCORING PACE — Project total points based on current pace vs the posted over/under. Flag over or under if significant deviation.
-3. TURNOVER IMPACT — Recent turnovers creating short-field scoring opportunities?
-4. LINE SHOPPING — Which specific book has the best number for each bet type right now?
-5. LIVE VALUE — Are any lines slow to adjust to game flow? Where is there exploitable edge?
-6. HALFTIME / QUARTER — Near halftime or end of quarter with strategic 2H or quarter bet value?
-7. LATE GAME — 4th quarter one-score game moneyline value on trailing team?
+You MUST respond with ONLY a JSON object. No other text. No markdown.
 
-Respond ONLY with JSON, no markdown, no backticks:
-{"alerts":[{"type":"spread|moneyline|over_under|prop|next_score|quarter","confidence":"HIGH|MED|LOW","team":"NE|SEA|OVER|UNDER","description":"short description of the opportunity","action":"specific instruction on what to bet and where","best_book":"fanduel|draftkings|betmgm|underdog","reasoning":"why this is a good bet right now","units":1}],"game_narrative":"2-3 sentence game flow summary","momentum":"NE|SEA|NEUTRAL","momentum_strength":5,"recommended_wait":false,"wait_reason":""}
+{"alerts":[{"type":"spread","confidence":"HIGH","team":"SEA","description":"example","action":"example","best_book":"fanduel","reasoning":"example","units":1}],"game_narrative":"summary","momentum":"NEUTRAL","momentum_strength":5,"recommended_wait":false,"wait_reason":""}
 
-RULES:
-- Generate 0-3 alerts MAX. Quality over quantity.
-- Only flag genuine edges — no filler alerts.
-- If pregame or no clear edge, return empty alerts and recommended_wait=true.
-- Higher aggression setting = lower confidence threshold for alerts.
-- Always specify which book has the best line for each alert.
-- momentum_strength: 1-10 scale.`;
+Rules:
+- 0-3 alerts only. Real edges only.
+- Aggression ${settings.aggression}/10: ${settings.aggression >= 7 ? "aggressive — more alerts ok" : settings.aggression <= 3 ? "very selective" : "moderate"}
+- If no edge, empty alerts array + recommended_wait=true
+- Output ONLY the JSON, nothing else`;
 
   const result = await callClaude(prompt, "strategy");
-  return parseJSON(result);
+  if (result.error) return { _error: result.error, _details: result.details };
+  return parseJSON(result.text);
 }

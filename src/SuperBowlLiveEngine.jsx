@@ -47,31 +47,40 @@ export default function SuperBowlLiveEngine() {
     // 1) Live game data
     addLog("📡 Fetching live game data via Claude AI...", "scan");
     const game = await fetchLiveGameData();
-    if (game) {
+    if (game && game._error) {
+      addLog(`⚠️ Game data error: ${game._error}`, "error");
+      if (game._details) addLog(`   Details: ${String(game._details).slice(0, 200)}`, "error");
+      setError(`API error: ${game._error}. Check ANTHROPIC_API_KEY in Vercel env vars.`);
+    } else if (game) {
       setGameData(game);
-      addLog(`✅ Score: NE ${game.ne_score} — SEA ${game.sea_score} | Q${game.quarter} ${game.clock} | ${game.status.toUpperCase()}`, "success");
+      addLog(`✅ Score: NE ${game.ne_score} — SEA ${game.sea_score} | Q${game.quarter} ${game.clock} | ${(game.status || "unknown").toUpperCase()}`, "success");
     } else {
-      addLog("⚠️ Could not fetch game data — check Vercel env var ANTHROPIC_API_KEY", "error");
-      setError("API call failed. Make sure ANTHROPIC_API_KEY is set in Vercel Environment Variables, then redeploy.");
+      addLog("⚠️ Could not parse game data response", "error");
     }
 
     // 2) Live odds
     addLog("💰 Scanning sportsbook odds across 4 books...", "scan");
     const odds = await fetchLiveOdds();
-    if (odds) {
+    if (odds && odds._error) {
+      addLog(`⚠️ Odds error: ${odds._error}`, "error");
+    } else if (odds && odds.books) {
       setOddsData(odds);
-      const bookCount = Object.values(odds.books || {}).filter((b) => b && b.spread?.ne && b.spread.ne !== "N/A").length;
+      const bookCount = Object.values(odds.books).filter((b) => b && b.spread?.ne && b.spread.ne !== "N/A").length;
       addLog(`✅ Odds loaded from ${bookCount}/4 sportsbooks`, "success");
       if (odds.notes) addLog(`📝 ${odds.notes}`, "info");
     } else {
-      addLog("⚠️ Could not fetch odds", "error");
+      addLog("⚠️ Could not parse odds data — Claude may not have found current lines", "error");
     }
 
     // 3) Strategy
-    if (game || odds) {
+    if ((game && !game._error) || (odds && !odds._error)) {
       addLog("🧠 Running AI strategy analysis...", "scan");
-      const strat = await getStrategicAnalysis(game || {}, odds || {}, settings);
-      if (strat) {
+      const gameForAnalysis = (game && !game._error) ? game : {};
+      const oddsForAnalysis = (odds && !odds._error) ? odds : {};
+      const strat = await getStrategicAnalysis(gameForAnalysis, oddsForAnalysis, settings);
+      if (strat && strat._error) {
+        addLog(`⚠️ Strategy error: ${strat._error}`, "error");
+      } else if (strat) {
         setAnalysis(strat);
         if (strat.alerts?.length > 0) {
           const newAlerts = strat.alerts.map((a, i) => ({ ...a, id: `${Date.now()}-${i}`, timestamp: new Date() }));
