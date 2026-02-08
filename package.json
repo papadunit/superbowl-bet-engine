@@ -1,7 +1,7 @@
 {
   "name": "superbowl-bet-engine",
-  "version": "1.0.0",
-  "description": "Super Bowl LX Live Betting Strategy Engine — AI-powered bet recommendations with multi-book odds scanning across FanDuel, DraftKings, BetMGM, and Underdog",
+  "version": "2.0.0",
+  "description": "Super Bowl LX Live Betting Strategy Engine — AI-powered multi-book odds scanning with server-side Claude API integration",
   "private": true,
   "type": "module",
   "scripts": {

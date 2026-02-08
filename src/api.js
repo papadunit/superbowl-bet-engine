@@ -1,48 +1,27 @@
-// ── Claude API Integration ────────────────────────────────
-// Uses the Anthropic Messages API with web search tool
-// to fetch live game data and sportsbook odds in real-time.
-//
-// IMPORTANT: This app is designed to run in environments where
-// the Anthropic API key is handled automatically (e.g., Claude.ai artifacts).
-//
-// For standalone deployment, you'll need to either:
-//   1. Set up a backend proxy that injects your API key
-//   2. Use environment variables with a serverless function
-//
-// NEVER put your API key directly in frontend code.
+// ── Frontend API Layer ────────────────────────────────────
+// All calls go through /api/claude (Vercel serverless function)
+// which handles auth + CORS server-side. No API key needed in the browser.
 
-const API_URL = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-sonnet-4-20250514";
+const PROXY_URL = "/api/claude";
 
-async function callClaude(prompt, apiKey = null) {
+async function callClaude(prompt, type = "general") {
   try {
-    const headers = { "Content-Type": "application/json" };
-    if (apiKey) {
-      headers["x-api-key"] = apiKey;
-      headers["anthropic-version"] = "2023-06-01";
-    }
-
-    const response = await fetch(apiKey ? API_URL : API_URL, {
+    const response = await fetch(PROXY_URL, {
       method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 1000,
-        messages: [{ role: "user", content: prompt }],
-        tools: [{ type: "web_search_20250305", name: "web_search" }]
-      })
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, type }),
     });
 
     if (!response.ok) {
-      const err = await response.text();
-      console.error("API error:", response.status, err);
+      const err = await response.json().catch(() => ({}));
+      console.error("Proxy error:", response.status, err);
       return null;
     }
 
     const data = await response.json();
-    return data.content?.map(item => item.text || "").filter(Boolean).join("\n") || "";
+    return data.text || null;
   } catch (err) {
-    console.error("Claude API error:", err);
+    console.error("Network error:", err);
     return null;
   }
 }
@@ -60,33 +39,33 @@ function parseJSON(raw) {
 }
 
 // ── Fetch live game score + state ─────────────────────────
-export async function fetchLiveGameData(apiKey = null) {
-  const prompt = `Search for the LIVE score and current game state of Super Bowl LX between New England Patriots and Seattle Seahawks happening on February 8, 2026.
+export async function fetchLiveGameData() {
+  const prompt = `Search for the LIVE score and current game state of Super Bowl LX between New England Patriots and Seattle Seahawks happening on February 8, 2026. Search for "Super Bowl LX score" and "Patriots Seahawks score today".
 
 I need you to respond ONLY with a JSON object in this exact format, no markdown, no backticks, no explanation:
 {"ne_score":0,"sea_score":0,"quarter":"1","clock":"15:00","possession":"NE","down_distance":"1st & 10","last_play":"","yard_line":"","status":"pregame","key_stats":{"ne_total_yards":0,"sea_total_yards":0,"ne_turnovers":0,"sea_turnovers":0,"ne_passing_yards":0,"sea_passing_yards":0,"ne_rushing_yards":0,"sea_rushing_yards":0}}
 
-For status use: "pregame", "live", "halftime", "final". Use the ACTUAL live data from your search results. If the game hasn't started yet, use pregame status.`;
+For status use: "pregame", "live", "halftime", "final". Use the ACTUAL live data from your search results. If the game hasn't started yet, use pregame status with 0-0 score.`;
 
-  const result = await callClaude(prompt, apiKey);
+  const result = await callClaude(prompt, "game");
   return parseJSON(result);
 }
 
 // ── Fetch live odds across sportsbooks ────────────────────
-export async function fetchLiveOdds(apiKey = null) {
-  const prompt = `Search for the CURRENT betting odds for Super Bowl LX Patriots vs Seahawks across FanDuel, DraftKings, BetMGM, and Underdog Fantasy. I need spread, moneyline, and over/under from each book.
+export async function fetchLiveOdds() {
+  const prompt = `Search for the CURRENT betting odds for Super Bowl LX Patriots vs Seahawks across FanDuel, DraftKings, BetMGM, and Underdog Fantasy. Search for "Super Bowl LX odds" and "Patriots Seahawks betting lines today". I need spread, moneyline, and over/under from each book.
 
 Respond ONLY with a JSON object, no markdown, no backticks, no extra text:
 {"timestamp":"","books":{"fanduel":{"spread":{"ne":"","sea":"","line":""},"moneyline":{"ne":"","sea":""},"over_under":{"total":"","over":"","under":""}},"draftkings":{"spread":{"ne":"","sea":"","line":""},"moneyline":{"ne":"","sea":""},"over_under":{"total":"","over":"","under":""}},"betmgm":{"spread":{"ne":"","sea":"","line":""},"moneyline":{"ne":"","sea":""},"over_under":{"total":"","over":"","under":""}},"underdog":{"spread":{"ne":"","sea":"","line":""},"moneyline":{"ne":"","sea":""},"over_under":{"total":"","over":"","under":""}}},"best_bets":{"best_ne_spread":"","best_sea_spread":"","best_ne_ml":"","best_sea_ml":"","best_over":"","best_under":""},"notes":""}
 
-Fill in real odds from your search in American format (+150, -110, etc). For best_bets, name the sportsbook with the best line. Use "N/A" for anything unavailable.`;
+Fill in real odds from your search in American format (+150, -110, etc). For best_bets, name the sportsbook with the best line for each. Use "N/A" for anything unavailable.`;
 
-  const result = await callClaude(prompt, apiKey);
+  const result = await callClaude(prompt, "odds");
   return parseJSON(result);
 }
 
 // ── Strategic analysis combining game + odds ──────────────
-export async function getStrategicAnalysis(gameData, oddsData, settings, apiKey = null) {
+export async function getStrategicAnalysis(gameData, oddsData, settings) {
   const prompt = `You are an elite sports betting analyst. Analyze this LIVE Super Bowl LX game state and odds data to identify sharp betting opportunities.
 
 LIVE GAME STATE:
@@ -114,12 +93,12 @@ Respond ONLY with JSON, no markdown, no backticks:
 
 RULES:
 - Generate 0-3 alerts MAX. Quality over quantity.
-- Only flag genuine edges. No filler alerts.
+- Only flag genuine edges — no filler alerts.
 - If pregame or no clear edge, return empty alerts and recommended_wait=true.
 - Higher aggression setting = lower confidence threshold for alerts.
 - Always specify which book has the best line for each alert.
 - momentum_strength: 1-10 scale.`;
 
-  const result = await callClaude(prompt, apiKey);
+  const result = await callClaude(prompt, "strategy");
   return parseJSON(result);
 }
